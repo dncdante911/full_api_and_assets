@@ -1,0 +1,37 @@
+[19-Dec-2025 15:44:25 Europe/Kyiv] PHP Fatal error:  Cannot redeclare CryptoHelper::decryptGCM() in /var/www/www-root/data/www/worldmates.club/api/v2/crypto_helper.php on line 229
+[19-Dec-2025 15:45:24 Europe/Kyiv] CryptoHelper: GCM decryption failed (authentication failed)
+[19-Dec-2025 15:51:19 Europe/Kyiv] PHP Fatal error:  Cannot redeclare CryptoHelper::decryptGCM() in /var/www/www-root/data/www/worldmates.club/api/v2/crypto_helper.php on line 229
+[19-Dec-2025 15:51:20 Europe/Kyiv] PHP Fatal error:  Cannot redeclare CryptoHelper::decryptGCM() in /var/www/www-root/data/www/worldmates.club/api/v2/crypto_helper.php on line 229
+[19-Dec-2025 15:55:36 Europe/Kyiv] PHP Fatal error:  Cannot redeclare CryptoHelper::decryptGCM() in /var/www/www-root/data/www/worldmates.club/api/v2/crypto_helper.php on line 243
+[19-Dec-2025 15:56:09 Europe/Kyiv] === GCM DECRYPTION DEBUG ===
+[19-Dec-2025 15:56:09 Europe/Kyiv] Timestamp: 1766150906
+[19-Dec-2025 15:56:09 Europe/Kyiv] Key (hex): 3137363631353039303631373636313530393036313736363135303930363137
+[19-Dec-2025 15:56:09 Europe/Kyiv] Key length: 32
+[19-Dec-2025 15:56:09 Europe/Kyiv] Ciphertext length: 16
+[19-Dec-2025 15:56:09 Europe/Kyiv] IV length: 12
+[19-Dec-2025 15:56:09 Europe/Kyiv] Tag length: 16
+[19-Dec-2025 15:56:09 Europe/Kyiv] Decryption successful!
+[19-Dec-2025 15:58:53 Europe/Kyiv] === GCM DECRYPTION DEBUG ===
+[19-Dec-2025 15:58:53 Europe/Kyiv] Timestamp: 1766150906
+[19-Dec-2025 15:58:53 Europe/Kyiv] Key (hex): 3137363631353039303631373636313530393036313736363135303930363137
+[19-Dec-2025 15:58:53 Europe/Kyiv] Key length: 32
+[19-Dec-2025 15:58:53 Europe/Kyiv] Ciphertext length: 16
+[19-Dec-2025 15:58:53 Europe/Kyiv] IV length: 12
+[19-Dec-2025 15:58:53 Europe/Kyiv] Tag length: 16
+[19-Dec-2025 15:58:53 Europe/Kyiv] Decryption successful!
+[19-Dec-2025 15:58:54 Europe/Kyiv] === GCM DECRYPTION DEBUG ===
+[19-Dec-2025 15:58:54 Europe/Kyiv] Timestamp: 1766150906
+[19-Dec-2025 15:58:54 Europe/Kyiv] Key (hex): 3137363631353039303631373636313530393036313736363135303930363137
+[19-Dec-2025 15:58:54 Europe/Kyiv] Key length: 32
+[19-Dec-2025 15:58:54 Europe/Kyiv] Ciphertext length: 16
+[19-Dec-2025 15:58:54 Europe/Kyiv] IV length: 12
+[19-Dec-2025 15:58:54 Europe/Kyiv] Tag length: 16
+[19-Dec-2025 15:58:54 Europe/Kyiv] Decryption successful!
+[19-Dec-2025 16:00:17 Europe/Kyiv] === GCM DECRYPTION DEBUG ===
+[19-Dec-2025 16:00:17 Europe/Kyiv] Timestamp: 1766150906
+[19-Dec-2025 16:00:17 Europe/Kyiv] Key (hex): 3137363631353039303631373636313530393036313736363135303930363137
+[19-Dec-2025 16:00:17 Europe/Kyiv] Key length: 32
+[19-Dec-2025 16:00:17 Europe/Kyiv] Ciphertext length: 16
+[19-Dec-2025 16:00:17 Europe/Kyiv] IV length: 12
+[19-Dec-2025 16:00:17 Europe/Kyiv] Tag length: 16
+[19-Dec-2025 16:00:17 Europe/Kyiv] Decryption successful!
