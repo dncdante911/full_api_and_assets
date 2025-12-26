@@ -1,0 +1,597 @@
+dncdante@proxyfilter:~$ cat /etc/haproxy/haproxy.cfg
+global
+    log 127.0.0.1:514 local0
+    chroot /var/lib/haproxy
+    stats socket /run/haproxy/admin.sock mode 660 level admin expose-fd listener                                                                                                                                                             s
+    stats timeout 30s
+    user haproxy
+    group haproxy
+    daemon
+
+    # Высокая производительность
+    maxconn 50000
+    nbthread 8
+    tune.ssl.default-dh-param 2048
+    tune.bufsize 32768
+    tune.maxrewrite 8192
+
+defaults
+    log global
+    option dontlognull
+    retries 3
+
+    # Оптимизированные таймауты
+    timeout connect 10s
+    timeout client 60s
+    timeout server 60s
+    timeout check 10s
+
+# ===============================================
+# СТАТИСТИКА
+# ===============================================
+listen stats
+    bind 0.0.0.0:8888
+    mode http
+    stats enable
+    stats uri /stats
+    stats refresh 15s
+#    stats admin if TRUE
+#    stats auth admin:hosting2024
+    stats hide-version
+
+# ===============================================
+# HTTP - РАЗДЕЛЕНИЕ ISPMANAGER (195.22.131.11) и FASTPANEL (46.232.232.38)
+# ===============================================
+frontend http_frontend
+    bind 195.22.131.11:80
+    bind 46.232.232.38:80
+    bind 0.0.0.0:80
+
+    mode http
+    option httplog
+    option forwardfor except 127.0.0.0/8
+
+    # НОВЫЕ ACL (Перенесены из-за ошибки "no such ACL")
+    acl is_ispmanager_ip dst 195.22.131.11
+    acl is_fastpanel_ip dst 46.232.232.38
+
+    # КРИТИЧНО: ACME должен быть ПЕРВЫМ!
+    acl is_acme path_beg /.well-known/acme-challenge/
+    use_backend ispmanager_http_backend if is_acme
+
+    # ПЕРЕНАПРАВЛЕНИЕ:
+    use_backend fastpanel_http_backend if is_fastpanel_ip
+
+    # По умолчанию (для 195.22.131.11 и 0.0.0.0)
+    default_backend ispmanager_http_backend
+
+    # ... (Остальные настройки HTTP-заголовков и безопасности остаются)
+    capture request header Host len 64
+    capture request header User-Agent len 128
+    stick-table type ip size 550k expire 120s store http_req_rate(10s),http_err_                                                                                                                                                             rate(10s),conn_cur,sess_rate(10s)
+    http-request track-sc0 src
+    http-request tarpit if { sc_http_req_rate(0) gt 1000 }
+    http-request tarpit if { sc_conn_cur(0) gt 550 }
+    http-request tarpit if { sc_sess_rate(0) gt 250 }
+    http-request deny if { url_param(query) -m reg (?i)(union\s+select|select.*f                                                                                                                                                             rom|drop\s+table|insert\s+into) }
+    http-request deny if { url_param(query) -m reg (?i)(<script|javascript:|aler                                                                                                                                                             t\() }
+    http-request deny if { path -m reg (?i)(\.\./|\.\.%2f) }
+    http-request deny if { hdr_cnt(host) gt 1 }
+    http-request deny if { hdr(user-agent) -m len lt 5 }
+    http-request deny if { method -i trace }
+    http-request set-header X-Forwarded-Proto http
+    http-request set-header X-Real-IP %[src]
+    http-request set-header X-Forwarded-For %[src]
+
+# ===============================================
+# HTTPS - РАЗДЕЛЕНИЕ ISPMANAGER и FASTPANEL (Порт 443)
+# ===============================================
+frontend https_frontend
+    bind 195.22.131.11:443
+    bind 46.232.232.38:443
+    bind 0.0.0.0:443
+
+    mode tcp
+    option tcplog
+
+    # НОВЫЕ ACL (Перенесены)
+    acl is_ispmanager_ip dst 195.22.131.11
+    acl is_fastpanel_ip dst 46.232.232.38
+
+    # ... (Ваши настройки DDoS на TCP уровне)
+    stick-table type ip size 200k expire 60s store conn_cur,conn_rate(10s),sess_                                                                                                                                                             rate(10s)
+    tcp-request inspect-delay 5s
+    tcp-request content track-sc0 src
+    tcp-request content reject if { sc_conn_rate(0) gt 50 }
+    tcp-request content reject if { sc_conn_cur(0) gt 100 }
+    tcp-request content reject if { sc_sess_rate(0) gt 30 }
+
+    # ПЕРЕНАПРАВЛЕНИЕ:
+    use_backend fastpanel_https_backend if is_fastpanel_ip
+
+    # По умолчанию (для 195.22.131.11 и 0.0.0.0)
+    default_backend ispmanager_https_backend
+
+# ===============================================
+# SNMP (TCP) - РАЗДЕЛЕНИЕ
+# ===============================================
+frontend snmp_frontend
+    bind 195.22.131.11:161
+    bind 46.232.232.38:161
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_snmp_backend if is_fastpanel_ip
+    default_backend snmp_backend
+
+# ===============================================
+# FTP порт 2121 - РАЗДЕЛЕНИЕ
+# ===============================================
+frontend ftp_frontend
+    bind 195.22.131.11:2121
+    bind 46.232.232.38:2121
+    bind 0.0.0.0:2121
+    mode tcp
+    option tcplog
+
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    # ПЕРЕНАПРАВЛЕНИЕ:
+    use_backend fastpanel_ftp_backend if is_fastpanel_ip
+
+    # По умолчанию
+    default_backend ftp_backend
+
+# ===============================================
+# ПОЧТОВЫЕ СЕРВИСЫ - РАЗДЕЛЕНИЕ
+# ===============================================
+
+# SMTP (25)
+frontend mail_smtp
+    bind 195.22.131.11:25
+    bind 46.232.232.38:25
+    mode tcp
+    option tcplog
+    stick-table type ip size 100k expire 300s store conn_cur,conn_rate(60s)
+    tcp-request inspect-delay 5s
+    tcp-request content track-sc0 src
+    tcp-request content reject if { sc_conn_rate(0) gt 20 }
+    tcp-request content reject if { sc_conn_cur(0) gt 50 }
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_smtp_backend if is_fastpanel_ip
+    default_backend mail_smtp_backend
+
+# POP3 (110)
+frontend mail_pop3
+    bind 195.22.131.11:110
+    bind 46.232.232.38:110
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_pop3_backend if is_fastpanel_ip
+    default_backend mail_pop3_backend
+
+# IMAP (143)
+frontend mail_imap
+    bind 195.22.131.11:143
+    bind 46.232.232.38:143
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_imap_backend if is_fastpanel_ip
+    default_backend mail_imap_backend
+
+# SMTPS (465)
+frontend mail_smtps
+    bind 195.22.131.11:465
+    bind 46.232.232.38:465
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_smtps_backend if is_fastpanel_ip
+    default_backend mail_smtps_backend
+
+# Submission (587)
+frontend mail_submission
+    bind 195.22.131.11:587
+    bind 46.232.232.38:587
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_submission_backend if is_fastpanel_ip
+    default_backend mail_submission_backend
+
+# IMAPS (993)
+frontend mail_imaps
+    bind 195.22.131.11:993
+    bind 46.232.232.38:993
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_imaps_backend if is_fastpanel_ip
+    default_backend mail_imaps_backend
+
+# POP3S (995)
+frontend mail_pop3s
+    bind 195.22.131.11:995
+    bind 46.232.232.38:995
+    mode tcp
+    option tcplog
+    # ACL
+    acl is_fastpanel_ip dst 46.232.232.38
+    use_backend fastpanel_mail_pop3s_backend if is_fastpanel_ip
+    default_backend mail_pop3s_backend
+
+# ===============================================
+# MANAGEMENT - ПАНЕЛИ УПРАВЛЕНИЯ
+# ===============================================
+
+# Management - ISPmanager (1501)
+frontend management_external
+    bind 195.22.131.11:1501
+    mode tcp
+    option tcplog
+    default_backend management_backend
+
+# FastPanel - Панель управления (8888)
+frontend fastpanel_ui
+    bind 46.232.232.38:8090
+    mode tcp
+    option tcplog
+    default_backend fastpanel_ui_backend
+
+# ===============================================
+# NODE.JS ПРИЛОЖЕНИЯ - ПОРТЫ 449, 356, 3000
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+
+frontend nodejs_449
+    bind 195.22.131.11:449
+    bind 46.232.232.38:449
+    mode tcp
+    option tcplog
+
+    # Включаем Keep-Alive на уровне ядра (чтобы онлайн не пропадал)
+    option clitcpka
+
+    # Убираем задержки анализа
+    tcp-request inspect-delay 0
+
+    default_backend nodejs_449_backend
+
+backend nodejs_449_backend
+    mode tcp
+    # Привязка по IP клиента (важно для Socket.io)
+    balance source
+
+    # Системный Keep-Alive со стороны сервера
+    option srvtcpka
+
+    # Огромные таймауты, чтобы сессия жила долго
+    timeout connect 10s
+    timeout server 3h
+    timeout client 3h
+    timeout tunnel 3h
+
+    server nodejs_app 192.168.0.250:449 check inter 5s rise 2 fall 3
+
+# ===============================================
+# NODE.JS ПРИЛОЖЕНИЕ - ПОРТ 356
+# ===============================================
+frontend nodejs_356
+    bind 195.22.131.11:356
+    bind 46.232.232.38:356
+    mode tcp
+    option tcplog
+    option clitcpka             # TCP Keep-Alive со стороны клиента
+    tcp-request inspect-delay 0 # Мгновенная пересылка пакетов
+    default_backend nodejs_356_backend
+
+backend nodejs_356_backend
+    mode tcp
+    option srvtcpka             # TCP Keep-Alive со стороны сервера
+
+    # Таймауты для стабильных сокетов (2 часа простоя)
+    timeout connect 5s
+    timeout server 2h
+    timeout client 2h
+    timeout tunnel 2h
+
+    server nodejs_app 192.168.0.250:356 check inter 5s rise 2 fall 3
+
+# ===============================================
+# NODE.JS ПРИЛОЖЕНИЕ - ПОРТ 3000
+# ===============================================
+frontend nodejs_3000
+    bind 195.22.131.11:3000
+    bind 46.232.232.38:3000
+    mode tcp
+    option tcplog
+    option clitcpka
+    tcp-request inspect-delay 0
+    default_backend nodejs_3000_backend
+
+backend nodejs_3000_backend
+    mode tcp
+    option srvtcpka
+
+    timeout connect 5s
+    timeout server 2h
+    timeout client 2h
+    timeout tunnel 2h
+
+    server nodejs_app 192.168.0.250:3000 check inter 5s rise 2 fall 3
+
+#frontend nodejs_449
+#       bind 195.22.131.11:449
+#       bind 46.232.232.38:449
+#       mode tcp
+#       option tcplog
+#       default_backend nodejs_449_backend
+#
+#backend nodejs_449_backend
+#       mode tcp
+#       server nodejs_app 192.168.0.250:449 check inter 10s
+#
+#frontend nodejs_356
+#       bind 195.22.131.11:356
+#       bind 46.232.232.38:356
+#       mode tcp
+#       option tcplog
+#       default_backend nodejs_356_backend
+#
+#backend nodejs_356_backend
+#       mode tcp
+#       server nodejs_app 192.168.0.250:356 check inter 10s
+#
+#frontend nodejs_3000
+#       bind 195.22.131.11:3000
+#       bind 46.232.232.38:3000
+#       mode tcp
+#       option tcplog
+#       default_backend nodejs_3000_backend
+#
+#backend nodejs_3000_backend
+#       mode tcp
+#       server nodejs_app 192.168.0.250:3000 check inter 10s
+
+# ===============================================
+# FTP порт 21 → автоперенаправление на 2121 (закомментировано)
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+#frontend ftp_21_redirect
+#       bind 195.22.131.11:21
+#       bind 46.232.232.38:21
+#       mode tcp
+#       option tcplog
+#       default_backend ftp_backend
+
+# ===============================================
+# DNS - ТОЛЬКО TCP (UDP через iptables)
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+
+#frontend dns_tcp_ns1
+#       bind 195.22.131.11:53
+#       mode tcp
+#       option tcplog
+#       default_backend dns_tcp_backend
+
+#frontend dns_tcp_ns2
+#       bind 46.232.232.38:53
+#       mode tcp
+#       option tcplog
+#       default_backend dns_tcp_backend
+
+#backend dns_tcp_backend
+#       mode tcp
+#       balance roundrobin
+#       option tcp-check
+#       tcp-check connect
+#       server dns_ispmanager 192.168.0.250:53 check inter 30s rise 2 fall 3
+
+# ===============================================
+# VPS ПОРТЫ - VNC КОНСОЛИ (5900-5999) - IPTABLES ТОЛЬКО
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+
+#frontend vps_vnc_5900
+#       defaults-from TCP
+#       bind 195.22.131.11:5900
+#       bind 46.232.232.38:5900
+#       default_backend vps_vnc_5900_back
+#
+#backend vps_vnc_5900_back
+#       mode tcp
+#       server vps_host 192.168.0.4:5900 check
+
+# ===============================================
+# VPS ПОРТЫ - АЛЬТЕРНАТИВНЫЕ SSH (2222-2225) - IPTABLES ТОЛЬКО
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+
+# ===============================================
+# VPS ПАНЕЛИ УПРАВЛЕНИЯ (8001-8003)
+# ===============================================
+# (ОСТАВЛЕНО БЕЗ ИЗМЕНЕНИЙ)
+
+#frontend vps_panel_8001
+#       bind 195.22.131.11:8001
+#       bind 46.232.232.38:8001
+#       mode tcp
+#       option tcplog
+#       default_backend vps_panel_8001_back
+#
+#backend vps_panel_8001_back
+#       mode tcp
+#       server vps1 192.168.0.4:8001 check
+
+#frontend vps_panel_8002
+#       bind 195.22.131.11:8002
+#       bind 46.232.232.38:8002
+#       mode tcp
+#       option tcplog
+#       default_backend vps_panel_8002_back
+#
+#backend vps_panel_8002_back
+#       mode tcp
+#       server vps1 192.168.0.4:8002 check
+
+# ===============================================
+# VPS ПАНЕЛЬ УПРАВЛЕНИЯ (8006) - НОВЫЙ ПОРТ
+# ===============================================
+frontend vps.sthost.pro
+    bind 195.22.131.11:8006
+    bind 46.232.232.38:8006
+    mode tcp
+    option tcplog
+    default_backend vps_panel_8006_back
+
+backend vps_panel_8006_back
+    mode tcp
+    server vps.sthost.pro 192.168.0.4:8006 check inter 10s
+
+# ===============================================
+# BACKENDS - ISPMANAGER (192.168.0.250)
+# ===============================================
+backend ispmanager_http_backend
+    mode http
+    balance roundrobin
+    option httpchk HEAD /
+    http-check expect status 200-399
+    http-request set-header X-Forwarded-For %[src]
+    http-request set-header X-Forwarded-Proto http
+    http-request set-header X-Original-Host %[hdr(host)]
+    server ispmanager 192.168.0.250:80 check inter 10s rise 2 fall 3 maxconn 100                                                                                                                                                             00
+
+backend ispmanager_https_backend
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    tcp-check connect
+    server ispmanager 192.168.0.250:443 check inter 10s rise 2 fall 3 maxconn 10                                                                                                                                                             000
+
+backend ftp_backend
+    mode tcp
+    server hosting 192.168.0.250:2121 check inter 10s
+
+backend mail_smtp_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:25 check inter 60s
+
+backend mail_pop3_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:110 check inter 60s
+
+backend mail_imap_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:143 check inter 60s
+
+backend mail_smtps_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:465 check inter 60s
+
+backend mail_submission_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:587 check inter 60s
+
+backend mail_imaps_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:993 check inter 60s
+
+backend mail_pop3s_backend
+    mode tcp
+    server mail_ispmanager 192.168.0.250:995 check inter 60s
+
+backend management_backend
+    mode tcp
+    server management_ispmanager 192.168.0.250:1501 check inter 30s
+
+backend snmp_backend
+    mode tcp
+    option tcp-check
+    tcp-check connect
+    server snmp_ispmanager 192.168.0.250:161 check inter 60s
+
+# ===============================================
+# BACKENDS - FASTPANEL (192.168.0.251)
+# ===============================================
+backend fastpanel_http_backend
+    mode http
+    balance roundrobin
+    option httpchk HEAD /
+    http-check expect status 200-399
+    http-request set-header X-Forwarded-For %[src]
+    http-request set-header X-Forwarded-Proto http
+    server fastpanel 192.168.0.251:80 check inter 10s rise 2 fall 3 maxconn 1000                                                                                                                                                             0
+
+backend fastpanel_https_backend
+    mode tcp
+    balance roundrobin
+    option tcp-check
+    tcp-check connect
+    server fastpanel 192.168.0.251:443 check inter 10s rise 2 fall 3 maxconn 100                                                                                                                                                             00
+
+backend fastpanel_ftp_backend
+    mode tcp
+    server fastpanel 192.168.0.251:2121 check inter 10s
+
+backend fastpanel_mail_smtp_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:25 check inter 60s
+
+backend fastpanel_mail_pop3_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:110 check inter 60s
+
+backend fastpanel_mail_imap_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:143 check inter 60s
+
+backend fastpanel_mail_smtps_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:465 check inter 60s
+
+backend fastpanel_mail_submission_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:587 check inter 60s
+
+backend fastpanel_mail_imaps_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:993 check inter 60s
+
+backend fastpanel_mail_pop3s_backend
+    mode tcp
+    server fastpanel_mail 192.168.0.251:995 check inter 60s
+
+backend fastpanel_ui_backend
+    mode tcp
+    server fastpanel_ui 192.168.0.251:8090 check inter 30s
+
+backend fastpanel_snmp_backend
+    mode tcp
+    option tcp-check
+    tcp-check connect
+    server snmp_fastpanel 192.168.0.251:161 check inter 60s
+
+# ===============================================
+# SSH PORT 219 - РАЗДЕЛЕНИЕ
+# ===============================================
+frontend ssh_frontend
+    bind 195.22.131.11:219
+    bind 46.232.232.38:219
+    mode tcp
+    option tcplog
+    default_backend ssh_backend
+
+backend ssh_backend
+    mode tcp
+    # IP адрес вашего сервера Ubuntu с SSH
+    server ubuntu_ssh_server 192.168.0.21:219 check
